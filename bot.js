@@ -78,11 +78,16 @@ async function updateTimerMessage(client) {
     const now = new Date();
     const nextDrogon = getNextDrogonTime();
     const nextReset = getDailyResetTime();
+    const nextWeekly = getWeeklyResetTime();
 
     const drogonDiff = nextDrogon - now;
     const dailyDiff = nextReset - now;
+    const weeklyDiff = nextWeekly - now;
 
-    const content = `⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`;
+const content = `⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n` +
+                `🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}\n` +
+                `📅 **Weekly Reset**: ${formatCountdown(weeklyDiff)}`;
+    
     await message.edit({ content });
 
     const currentHour = now.getUTCHours();
