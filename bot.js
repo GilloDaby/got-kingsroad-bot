@@ -283,88 +283,127 @@ const msg = await channel.send(
     
 if (sub === 'reminder') {
   const action = interaction.options.getSubcommand();
+  console.log(`[DEBUG] reminder ${action} called by ${interaction.user.tag}`);
 
-  if (action === 'add') {
-    const timerType = interaction.options.getString('timer');
-    const minutes = interaction.options.getInteger('minutes');
-    const user = interaction.user;
+  try {
+    if (action === 'add') {
+      const timerType = interaction.options.getString('timer');
+      const minutes = interaction.options.getInteger('minutes');
+      const user = interaction.user;
 
-    let targetTime;
-    if (timerType === 'drogon') targetTime = getNextDrogonTime();
-    else if (timerType === 'daily') targetTime = getDailyResetTime();
-    else if (timerType === 'weekly') targetTime = getWeeklyResetTime();
-    else {
-      return interaction.reply({ content: "❌ Unknown timer type.", ephemeral: true });
-    }
+      let targetTime;
+      if (timerType === 'drogon') targetTime = getNextDrogonTime();
+      else if (timerType === 'daily') targetTime = getDailyResetTime();
+      else if (timerType === 'weekly') targetTime = getWeeklyResetTime();
+      else {
+        return interaction.reply({ content: "❌ Unknown timer type.", ephemeral: true });
+      }
 
-    const now = new Date();
-    const diffToEvent = Math.floor((targetTime - now) / 60000);
-    const delay = targetTime - now - (minutes * 60000);
+      const now = new Date();
+      const diffToEvent = Math.floor((targetTime - now) / 60000);
+      const delay = targetTime - now - (minutes * 60000);
 
-    if (delay <= 0) {
+      if (delay <= 0) {
+        return interaction.reply({
+          content: `❌ ${timerType.toUpperCase()} happens in **${diffToEvent} minute(s)**. It's too late to set a **${minutes}-minute reminder**.`,
+          ephemeral: true
+        });
+      }
+
+      let reminders = [];
+      try {
+        reminders = loadReminders();
+      } catch (err) {
+        console.error('[ERROR] Failed to load reminders:', err);
+        return interaction.reply({ content: '❌ Failed to read saved reminders.', ephemeral: true });
+      }
+
+      reminders.push({
+        userId: user.id,
+        timer: timerType,
+        minutes: minutes
+      });
+
+      try {
+        saveReminders(reminders);
+      } catch (err) {
+        console.error('[ERROR] Failed to save reminders:', err);
+        return interaction.reply({ content: '❌ Failed to save your reminder.', ephemeral: true });
+      }
+
       return interaction.reply({
-        content: `❌ ${timerType.toUpperCase()} happens in **${diffToEvent} minute(s)**. It's too late to set a **${minutes}-minute reminder**.`,
+        content: `✅ I’ll DM you **${minutes} minute(s)** before **${timerType.toUpperCase()}**.`,
         ephemeral: true
       });
     }
 
-    const reminders = loadReminders();
-    reminders.push({
-      userId: user.id,
-      timer: timerType,
-      minutes: minutes
-    });
-    saveReminders(reminders);
+    if (action === 'list') {
+      let allReminders = [];
+      try {
+        allReminders = loadReminders();
+      } catch (err) {
+        console.error('[ERROR] Failed to load reminders:', err);
+        return interaction.reply({ content: '❌ Could not read your reminders.', ephemeral: true });
+      }
 
-    return interaction.reply({
-      content: `✅ I’ll DM you **${minutes} minute(s)** before **${timerType.toUpperCase()}**.`,
-      ephemeral: true
-    });
-  }
+      const userReminders = allReminders.filter(r => r.userId === interaction.user.id);
 
-  if (action === 'list') {
-    const allReminders = loadReminders();
-    const userReminders = allReminders.filter(r => r.userId === interaction.user.id);
+      if (userReminders.length === 0) {
+        return interaction.reply({
+          content: "📭 You have no active reminders.",
+          ephemeral: true
+        });
+      }
 
-    if (userReminders.length === 0) {
+      const description = userReminders
+        .map(r => `• **${r.timer.toUpperCase()}** – ${r.minutes} minute(s) before`)
+        .join('\n');
+
       return interaction.reply({
-        content: "📭 You have no active reminders.",
+        embeds: [{
+          title: '⏰ Your Active Reminders',
+          description,
+          color: 0x00bfff
+        }],
         ephemeral: true
       });
     }
 
-    const description = userReminders
-      .map(r => `• **${r.timer.toUpperCase()}** – ${r.minutes} minute(s) before`)
-      .join('\n');
+    if (action === 'clear') {
+      let reminders = [];
+      try {
+        reminders = loadReminders();
+      } catch (err) {
+        console.error('[ERROR] Failed to load reminders:', err);
+        return interaction.reply({ content: '❌ Could not read saved reminders.', ephemeral: true });
+      }
 
-    return interaction.reply({
-      embeds: [{
-        title: '⏰ Your Active Reminders',
-        description,
-        color: 0x00bfff
-      }],
-      ephemeral: true
-    });
-  }
+      const before = reminders.length;
+      reminders = reminders.filter(r => r.userId !== interaction.user.id);
+      const removed = before - reminders.length;
 
-  if (action === 'clear') {
-    let reminders = loadReminders();
-    const before = reminders.length;
-    reminders = reminders.filter(r => r.userId !== interaction.user.id);
-    const removed = before - reminders.length;
-    saveReminders(reminders);
+      try {
+        saveReminders(reminders);
+      } catch (err) {
+        console.error('[ERROR] Failed to save reminders:', err);
+        return interaction.reply({ content: '❌ Failed to clear reminders.', ephemeral: true });
+      }
 
-    return interaction.reply({
-      embeds: [{
-        title: '🗑️ Reminders cleared',
-        description: `You removed **${removed}** reminder(s).`,
-        color: 0xe74c3c
-      }],
-      ephemeral: true
-    });
+      return interaction.reply({
+        embeds: [{
+          title: '🗑️ Reminders cleared',
+          description: `You removed **${removed}** reminder(s).`,
+          color: 0xe74c3c
+        }],
+        ephemeral: true
+      });
+    }
+  } catch (err) {
+    console.error(`[UNCAUGHT ERROR] in /setup reminder ${action}:`, err);
+    return interaction.reply({ content: "❌ An unexpected error occurred.", ephemeral: true });
   }
 }
-    
+
     if (sub === 'help') {
       replyMessage = `
 📘 **Available Commands**:
