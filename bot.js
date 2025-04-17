@@ -111,10 +111,22 @@ client.on('interactionCreate', async interaction => {
     let replyMessage = '';
 
     if (sub === 'channel') {
-      config.channelId = interaction.channel.id;
-      saveConfig();
-      replyMessage = `✅ Channel set to: <#${config.channelId}>`;
-    }
+  config.channelId = interaction.channel.id;
+  saveConfig();
+  const replyMessage = `✅ Channel set to: <#${config.channelId}>`;
+
+  await interaction.reply({
+    embeds: [{
+      title: '✅ Setup',
+      description: replyMessage,
+      color: 0x2ecc71
+    }],
+    flags: 64
+  });
+
+  setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
+}
+
 
     if (sub === 'message') {
       await interaction.deferReply({ flags: 64 });
