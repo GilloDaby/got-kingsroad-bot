@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const fs = require('fs');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
@@ -10,8 +11,8 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
 });
 
-let timerMessageId = null;
-let timerChannelId = null;
+let timerMessageId = config.timerMessageId || null;
+let timerChannelId = config.channelId || null;
 let lastDrogonHour = null;
 let lastDailyDate = null;
 
@@ -44,10 +45,10 @@ function formatCountdown(ms, short = false) {
 }
 
 async function updateTimerMessage(client) {
-  if (!config.channelId || !timerMessageId) return;
+  if (!config.channelId || !config.timerMessageId) return;
   try {
     const channel = await client.channels.fetch(config.channelId);
-    const message = await channel.messages.fetch(timerMessageId);
+    const message = await channel.messages.fetch(config.timerMessageId);
 
     const now = new Date();
     const nextDrogon = getNextDrogonTime();
@@ -87,32 +88,23 @@ client.on('interactionCreate', async interaction => {
   try {
     sub = interaction.options.getSubcommand();
   } catch {
-    const replyMessage = `
-❌ Please use a valid subcommand:
-
-- /setup channel
-- /setup message
-- /setup reset
-- /setup rankdaily
-- /setup rankdrogon
-- /setup help`;
+    const replyMessage = `❌ Please use a valid subcommand:\n- /setup channel\n- /setup message\n- /setup reset\n- /setup rankdaily\n- /setup rankdrogon\n- /setup ping\n- /setup help`;
     await interaction.reply({
       embeds: [{ title: 'Error', description: replyMessage, color: 0xe74c3c }],
-      ephemeral: true
+      flags: 64
     });
     return;
   }
 
   if (interaction.commandName === 'setup') {
-    // 🔒 Only allow administrators
     if (!interaction.memberPermissions.has('Administrator')) {
       return interaction.reply({
         embeds: [{
           title: '⛔ Access Denied',
-          description: 'Only server administrators can use the `/setup` command.',
+          description: 'Only administrators can use the `/setup` command.',
           color: 0xe74c3c
         }],
-        ephemeral: true
+        flags: 64
       });
     }
 
@@ -125,53 +117,50 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (sub === 'message') {
-  await interaction.deferReply({ ephemeral: true });
-
-  if (!config.channelId) {
-    replyMessage = "❌ No channel configured. Use `/setup channel` first.";
-  } else {
-    try {
-      const channel = await client.channels.fetch(config.channelId);
-      const drogonDiff = getNextDrogonTime() - new Date();
-      const dailyDiff = getDailyResetTime() - new Date();
-      const msg = await channel.send(
-        `⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`
-      );
-      timerMessageId = msg.id;
-      timerChannelId = config.channelId;
-      replyMessage = `🆗 Timer message sent in <#${config.channelId}>`;
-    } catch (err) {
-      console.error("Error sending message:", err.message);
-      replyMessage = "❌ Failed to send timer message.";
-    }
-  }
-
-  await interaction.editReply({
-    embeds: [{
-      title: '✅ Setup',
-      description: replyMessage,
-      color: 0x2ecc71
-    }]
-  });
-
-  setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
-}
-
-    if (sub === 'reset') {
-      if (!config.channelId || !timerMessageId) {
-        replyMessage = "⚠️ No active message to delete.";
+      await interaction.deferReply({ flags: 64 });
+      if (!config.channelId) {
+        replyMessage = "❌ No channel configured. Use `/setup channel` first.";
       } else {
         try {
           const channel = await client.channels.fetch(config.channelId);
-          const msg = await channel.messages.fetch(timerMessageId);
+          const drogonDiff = getNextDrogonTime() - new Date();
+          const dailyDiff = getDailyResetTime() - new Date();
+          const msg = await channel.send(`⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`);
+          config.timerMessageId = msg.id;
+          saveConfig();
+          timerMessageId = msg.id;
+          replyMessage = `🆗 Timer message sent in <#${config.channelId}>`;
+        } catch (err) {
+          console.error("Error sending message:", err.message);
+          replyMessage = "❌ Failed to send timer message.";
+        }
+      }
+      await interaction.editReply({
+        embeds: [{ title: '✅ Setup', description: replyMessage, color: 0x2ecc71 }]
+      });
+      setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
+    }
+
+    if (sub === 'reset') {
+      if (!config.channelId || !config.timerMessageId) {
+        replyMessage = "⚠️ No active timer message to delete.";
+      } else {
+        try {
+          const channel = await client.channels.fetch(config.channelId);
+          const msg = await channel.messages.fetch(config.timerMessageId);
           await msg.delete();
-          timerMessageId = null;
+          config.timerMessageId = null;
+          saveConfig();
           replyMessage = "🧹 Timer message successfully deleted.";
         } catch (err) {
           console.error("Error deleting message:", err.message);
-          replyMessage = "❌ Failed to delete the message.";
+          replyMessage = "❌ Failed to delete the timer message.";
         }
       }
+      await interaction.reply({
+        embeds: [{ title: '✅ Setup', description: replyMessage, color: 0x2ecc71 }],
+        flags: 64
+      });
     }
 
     if (sub === 'rankdaily') {
@@ -179,6 +168,10 @@ client.on('interactionCreate', async interaction => {
       config.dailyRoleId = role.id;
       saveConfig();
       replyMessage = `📌 Daily Reset role set to: <@&${role.id}>`;
+      await interaction.reply({
+        embeds: [{ title: '✅ Setup', description: replyMessage, color: 0x2ecc71 }],
+        flags: 64
+      });
     }
 
     if (sub === 'rankdrogon') {
@@ -186,30 +179,39 @@ client.on('interactionCreate', async interaction => {
       config.drogonRoleId = role.id;
       saveConfig();
       replyMessage = `📌 Drogon Timer role set to: <@&${role.id}>`;
+      await interaction.reply({
+        embeds: [{ title: '✅ Setup', description: replyMessage, color: 0x2ecc71 }],
+        flags: 64
+      });
     }
 
     if (sub === 'help') {
       replyMessage = `
 📘 **Available Commands**:
-
 • \`/setup channel\` – Sets the channel to post the timer
 • \`/setup message\` – Sends or resets the timer message
 • \`/setup reset\` – Deletes the active timer message
-• \`/setup rankdaily @role\` – Defines the role to ping before Daily Reset
-• \`/setup rankdrogon @role\` – Defines the role to ping before Drogon spawn
+• \`/setup rankdaily @role\` – Sets the role to ping before Daily Reset
+• \`/setup rankdrogon @role\` – Sets the role to ping before Drogon
+• \`/setup ping\` – Shows bot latency
 • \`/setup help\` – Shows this help message`;
+      await interaction.reply({
+        embeds: [{ title: '📘 Help', description: replyMessage, color: 0x3498db }],
+        flags: 64
+      });
+      setTimeout(() => interaction.deleteReply().catch(() => {}), 10000);
     }
 
-    if (replyMessage) {
+    if (sub === 'ping') {
+      const latency = Date.now() - interaction.createdTimestamp;
       await interaction.reply({
         embeds: [{
-          title: sub === 'help' ? '📘 Help' : '✅ Success',
-          description: replyMessage,
-          color: sub === 'help' ? 0x3498db : 0x2ecc71
+          title: '🏓 Pong!',
+          description: `Latency: ${latency}ms`,
+          color: 0x00bfff
         }],
-        ephemeral: true
+        flags: 64
       });
-      setTimeout(() => interaction.deleteReply().catch(() => {}), sub === 'help' ? 10000 : 5000);
     }
   }
 });
@@ -224,6 +226,7 @@ client.on('interactionCreate', async interaction => {
       .addSubcommand(sub => sub.setName('reset').setDescription('Delete the current timer message'))
       .addSubcommand(sub => sub.setName('rankdaily').setDescription('Set the role to ping before the Daily Reset').addRoleOption(option => option.setName('role').setDescription('Role to ping').setRequired(true)))
       .addSubcommand(sub => sub.setName('rankdrogon').setDescription('Set the role to ping before Drogon spawns').addRoleOption(option => option.setName('role').setDescription('Role to ping').setRequired(true)))
+      .addSubcommand(sub => sub.setName('ping').setDescription('Check bot latency'))
       .addSubcommand(sub => sub.setName('help').setDescription("Display command usage help"))
   ];
 
