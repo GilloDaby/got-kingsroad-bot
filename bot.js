@@ -19,6 +19,16 @@ let lastDailyDate = null;
 function saveConfig() {
   fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
 }
+function getWeeklyResetTime() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setUTCHours(5, 0, 0, 0); // 05:00 UTC = 01:00 Québec
+
+  const day = now.getUTCDay();
+  const passed = day > 4 || (day === 4 && now.getUTCHours() >= 5);
+  next.setUTCDate(now.getUTCDate() + (passed ? 7 - day + 4 : 4 - day));
+  return next;
+}
 
 function getDailyResetTime() {
   const now = new Date();
@@ -113,7 +123,7 @@ client.on('interactionCreate', async interaction => {
     if (sub === 'channel') {
   config.channelId = interaction.channel.id;
   saveConfig();
-  const replyMessage = `✅ Channel set to: <#${config.channelId}>`;
+      replyMessage = `✅ Channel set to: <#${config.channelId}>`;
 
   await interaction.reply({
     embeds: [{
@@ -139,6 +149,8 @@ client.on('interactionCreate', async interaction => {
           const dailyDiff = getDailyResetTime() - new Date();
           const msg = await channel.send(`⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`);
           config.timerMessageId = msg.id;
+          timerMessageId = msg.id;
+
           saveConfig();
           timerMessageId = msg.id;
           replyMessage = `🆗 Timer message sent in <#${config.channelId}>`;
@@ -196,7 +208,56 @@ client.on('interactionCreate', async interaction => {
         flags: 64
       });
     }
+    
+    if (sub === 'rankweekly') {
+  const role = interaction.options.getRole('role');
+  config.weeklyRoleId = role.id;
+  saveConfig();
+  replyMessage = `📌 Weekly Reset role set to: <@&${role.id}>`;
+  await interaction.reply({
+    embeds: [{ title: '✅ Setup', description: replyMessage, color: 0x2ecc71 }],
+    flags: 64
+  });
+}
+    
+if (sub === 'reminder') {
+  const timerType = interaction.options.getString('timer');
+  const minutes = interaction.options.getInteger('minutes');
+  const user = interaction.user;
 
+  // Obtenir l'heure cible selon le timer sélectionné
+  let targetTime;
+  if (timerType === 'drogon') targetTime = getNextDrogonTime();
+  else if (timerType === 'daily') targetTime = getDailyResetTime();
+  else if (timerType === 'weekly') targetTime = getWeeklyResetTime();
+  else {
+    return interaction.reply({ content: "❌ Unknown timer type.", ephemeral: true });
+  }
+
+  const now = new Date();
+  const delay = targetTime - now - (minutes * 60000);
+
+  if (delay <= 0) {
+    return interaction.reply({
+      content: `❌ It's too late to set a reminder ${minutes} min before ${timerType}.`,
+      ephemeral: true
+    });
+  }
+
+  await interaction.reply({
+    content: `✅ I’ll DM you ${minutes} minute(s) before **${timerType}**.`,
+    ephemeral: true
+  });
+
+  setTimeout(async () => {
+    try {
+      await user.send(`🔔 **Reminder:** ${timerType.toUpperCase()} is happening in ${minutes} minute(s)!`);
+    } catch (err) {
+      console.error(`❌ Couldn't send DM to ${user.tag}`, err);
+    }
+  }, delay);
+}
+    
     if (sub === 'help') {
       replyMessage = `
 📘 **Available Commands**:
@@ -205,6 +266,8 @@ client.on('interactionCreate', async interaction => {
 • \`/setup reset\` – Deletes the active timer message
 • \`/setup rankdaily @role\` – Sets the role to ping before Daily Reset
 • \`/setup rankdrogon @role\` – Sets the role to ping before Drogon
+• \`/setup rankweekly @role\` – Sets the role to ping before Weekly Reset
+• \`/setup reminder timer:<type> minutes:<X>\` – Send yourself a DM reminder before a timer ends
 • \`/setup ping\` – Shows bot latency
 • \`/setup help\` – Shows this help message`;
       await interaction.reply({
@@ -233,13 +296,67 @@ client.on('interactionCreate', async interaction => {
     new SlashCommandBuilder()
       .setName('setup')
       .setDescription('Timer setup and configuration')
-      .addSubcommand(sub => sub.setName('channel').setDescription('Set the channel for displaying the timer'))
-      .addSubcommand(sub => sub.setName('message').setDescription('Send or reset the timer message'))
-      .addSubcommand(sub => sub.setName('reset').setDescription('Delete the current timer message'))
-      .addSubcommand(sub => sub.setName('rankdaily').setDescription('Set the role to ping before the Daily Reset').addRoleOption(option => option.setName('role').setDescription('Role to ping').setRequired(true)))
-      .addSubcommand(sub => sub.setName('rankdrogon').setDescription('Set the role to ping before Drogon spawns').addRoleOption(option => option.setName('role').setDescription('Role to ping').setRequired(true)))
-      .addSubcommand(sub => sub.setName('ping').setDescription('Check bot latency'))
-      .addSubcommand(sub => sub.setName('help').setDescription("Display command usage help"))
+      .addSubcommand(sub => 
+        sub.setName('channel')
+          .setDescription('Set the channel for displaying the timer')
+      )
+      .addSubcommand(sub => 
+        sub.setName('message')
+          .setDescription('Send or reset the timer message')
+      )
+      .addSubcommand(sub => 
+        sub.setName('reset')
+          .setDescription('Delete the current timer message')
+      )
+      .addSubcommand(sub => 
+        sub.setName('rankdaily')
+          .setDescription('Set the role to ping before the Daily Reset')
+          .addRoleOption(option => 
+            option.setName('role').setDescription('Role to ping').setRequired(true)
+          )
+      )
+      .addSubcommand(sub => 
+        sub.setName('rankdrogon')
+          .setDescription('Set the role to ping before Drogon spawns')
+          .addRoleOption(option => 
+            option.setName('role').setDescription('Role to ping').setRequired(true)
+          )
+      )
+
+     .addSubcommand(sub =>
+  sub.setName('rankweekly')
+    .setDescription('Set the role to ping before the Weekly Reset')
+    .addRoleOption(option =>
+      option.setName('role').setDescription('Role to ping').setRequired(true)
+    )
+) 
+      .addSubcommand(sub =>
+        sub.setName('reminder')
+          .setDescription('Set a private reminder for a timer')
+          .addStringOption(opt =>
+            opt.setName('timer')
+              .setDescription('Which timer to set the reminder for')
+              .setRequired(true)
+              .addChoices(
+                { name: 'Drogon', value: 'drogon' },
+                { name: 'Daily Reset', value: 'daily' },
+                { name: 'Weekly Reset', value: 'weekly' }
+              )
+          )
+          .addIntegerOption(opt =>
+            opt.setName('minutes')
+              .setDescription('How many minutes before the event')
+              .setRequired(true)
+          )
+      )
+    .addSubcommand(sub =>
+        sub.setName('help')
+          .setDescription('Display command usage help')
+      )
+    .addSubcommand(sub =>
+        sub.setName('ping')
+          .setDescription('Check bot latency')
+      )
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
