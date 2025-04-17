@@ -147,11 +147,14 @@ client.once('ready', async () => {
 });
 
 client.on('interactionCreate', async interaction => {
+  console.log(`[DEBUG] New interaction: ${interaction.commandName}`);
   if (!interaction.isChatInputCommand()) return;
 
   let sub = null;
   try {
     sub = interaction.options.getSubcommand();
+    console.log(`[DEBUG] Subcommand: ${sub}`);
+
   } catch {
     const replyMessage = `❌ Please use a valid subcommand:\n- /setup channel\n- /setup message\n- /setup reset\n- /setup rankdaily\n- /setup rankdrogon\n- /setup ping\n- /setup help`;
     await interaction.reply({
@@ -402,6 +405,11 @@ if (sub === 'reminder') {
     console.error(`[UNCAUGHT ERROR] in /setup reminder ${action}:`, err);
     return interaction.reply({ content: "❌ An unexpected error occurred.", ephemeral: true });
   }
+
+  return interaction.reply({
+  content: "❌ Unknown reminder action.",
+  ephemeral: true
+});
 }
 
     if (sub === 'help') {
