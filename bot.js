@@ -125,18 +125,37 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (sub === 'message') {
-      if (!config.channelId) {
-        replyMessage = "❌ No channel configured. Use `/setup channel` first.";
-      } else {
-        const channel = await client.channels.fetch(config.channelId);
-        const drogonDiff = getNextDrogonTime() - new Date();
-        const dailyDiff = getDailyResetTime() - new Date();
-        const msg = await channel.send(`⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`);
-        timerMessageId = msg.id;
-        timerChannelId = config.channelId;
-        replyMessage = `🆗 Timer message sent in <#${config.channelId}>`;
-      }
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!config.channelId) {
+    replyMessage = "❌ No channel configured. Use `/setup channel` first.";
+  } else {
+    try {
+      const channel = await client.channels.fetch(config.channelId);
+      const drogonDiff = getNextDrogonTime() - new Date();
+      const dailyDiff = getDailyResetTime() - new Date();
+      const msg = await channel.send(
+        `⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`
+      );
+      timerMessageId = msg.id;
+      timerChannelId = config.channelId;
+      replyMessage = `🆗 Timer message sent in <#${config.channelId}>`;
+    } catch (err) {
+      console.error("Error sending message:", err.message);
+      replyMessage = "❌ Failed to send timer message.";
     }
+  }
+
+  await interaction.editReply({
+    embeds: [{
+      title: '✅ Setup',
+      description: replyMessage,
+      color: 0x2ecc71
+    }]
+  });
+
+  setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
+}
 
     if (sub === 'reset') {
       if (!config.channelId || !timerMessageId) {
