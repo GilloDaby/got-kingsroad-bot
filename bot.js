@@ -1,6 +1,9 @@
+donc est-ce bon là?
+
 
 require('dotenv').config();
-const fs = require('fs');
+const db = require('./db'); // (tu le crées à l'étape suivante)
+
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -11,21 +14,27 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
 });
 
-const REMINDER_FILE = './reminders.json';
-
-function loadReminders() {
-  try {
-    const data = fs.readFileSync(REMINDER_FILE);
-    const reminders = JSON.parse(data);
-    return Array.isArray(reminders) ? reminders : [];
-  } catch {
-    return [];
-  }
+async function loadReminders() {
+  const [rows] = await db.query('SELECT * FROM reminders');
+  return rows;
 }
 
-function saveReminders(reminders) {
-  fs.writeFileSync(REMINDER_FILE, JSON.stringify(reminders, null, 2));
+async function addReminder(userId, timer, minutes) {
+  await db.query(
+    'INSERT INTO reminders (userId, timer, minutes) VALUES (?, ?, ?)',
+    [userId, timer, minutes]
+  );
 }
+
+async function clearUserReminders(userId) {
+  await db.query('DELETE FROM reminders WHERE userId = ?', [userId]);
+}
+
+async function getUserReminders(userId) {
+  const [rows] = await db.query('SELECT * FROM reminders WHERE userId = ?', [userId]);
+  return rows;
+}
+
 let timerMessageId = config.timerMessageId || null;
 let timerChannelId = config.channelId || null;
 let lastDrogonHour = null;
@@ -110,40 +119,45 @@ client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   setInterval(() => updateTimerMessage(client), 10000);
 
+client.once('ready', async () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  
+  // Met à jour le message toutes les 10 secondes
+  setInterval(() => updateTimerMessage(client), 10000);
+
+  // Vérifie et envoie les rappels toutes les 30 secondes
   setInterval(async () => {
-  const reminders = loadReminders();
-  const now = new Date();
+    const reminders = await loadReminders();
+    const now = new Date();
 
-  const timers = {
-    drogon: getNextDrogonTime(),
-    daily: getDailyResetTime(),
-    weekly: getWeeklyResetTime()
-  };
+    const timers = {
+      drogon: getNextDrogonTime(),
+      daily: getDailyResetTime(),
+      weekly: getWeeklyResetTime()
+    };
 
-  const updated = [];
+    for (const reminder of reminders) {
+      const eventTime = timers[reminder.timer];
+      const diff = eventTime - now;
+      const threshold = reminder.minutes * 60 * 1000;
 
-  for (const reminder of reminders) {
-    const eventTime = timers[reminder.timer];
-    const diff = eventTime - now;
-    const threshold = reminder.minutes * 60 * 1000;
+      if (diff <= threshold) {
+        try {
+          const user = await client.users.fetch(reminder.userId);
+          await user.send(`🔔 **Reminder:** ${reminder.timer.toUpperCase()} starts in ${reminder.minutes} minute(s)!`);
+          console.log(`✅ Reminder sent to ${user.tag}`);
+        } catch (e) {
+          console.warn(`❌ Failed to DM ${reminder.userId}:`, e.message);
+        }
 
-    if (diff > threshold) {
-      updated.push(reminder); // pas encore le moment
-    } else {
-      // envoyer le DM
-      try {
-        const user = await client.users.fetch(reminder.userId);
-        await user.send(`🔔 **Reminder:** ${reminder.timer.toUpperCase()} starts in ${reminder.minutes} minute(s)!`);
-        console.log(`✅ Reminder sent to ${user.tag}`);
-      } catch (e) {
-        console.warn(`❌ Failed to DM ${reminder.userId}:`, e.message);
+        // Supprimer ce rappel de la DB une fois envoyé
+        await db.query(
+          'DELETE FROM reminders WHERE userId = ? AND timer = ? AND minutes = ?',
+          [reminder.userId, reminder.timer, reminder.minutes]
+        );
       }
-      // ne pas remettre dans updated = supprime le rappel
     }
-  }
-
-  saveReminders(updated);
-}, 30 * 1000); // toutes les 30 secondes
+  }, 30000);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -313,43 +327,14 @@ if (sub === 'reminder') {
         });
       }
 
-      let reminders = [];
-      try {
-        reminders = loadReminders();
-      } catch (err) {
-        console.error('[ERROR] Failed to load reminders:', err);
-        return interaction.reply({ content: '❌ Failed to read saved reminders.', ephemeral: true });
-      }
+     let userReminders = [];
+try {
+  userReminders = await getUserReminders(interaction.user.id);
+} catch (err) {
+  console.error('[ERROR] Failed to load reminders:', err);
+  return interaction.reply({ content: '❌ Could not read your reminders.', ephemeral: true });
+}
 
-      reminders.push({
-        userId: user.id,
-        timer: timerType,
-        minutes: minutes
-      });
-
-      try {
-        saveReminders(reminders);
-      } catch (err) {
-        console.error('[ERROR] Failed to save reminders:', err);
-        return interaction.reply({ content: '❌ Failed to save your reminder.', ephemeral: true });
-      }
-
-      return interaction.reply({
-        content: `✅ I’ll DM you **${minutes} minute(s)** before **${timerType.toUpperCase()}**.`,
-        ephemeral: true
-      });
-    }
-
-    if (action === 'list') {
-      let allReminders = [];
-      try {
-        allReminders = loadReminders();
-      } catch (err) {
-        console.error('[ERROR] Failed to load reminders:', err);
-        return interaction.reply({ content: '❌ Could not read your reminders.', ephemeral: true });
-      }
-
-      const userReminders = allReminders.filter(r => r.userId === interaction.user.id);
 
       if (userReminders.length === 0) {
         return interaction.reply({
@@ -375,22 +360,16 @@ if (sub === 'reminder') {
     if (action === 'clear') {
       let reminders = [];
       try {
-        reminders = loadReminders();
-      } catch (err) {
-        console.error('[ERROR] Failed to load reminders:', err);
-        return interaction.reply({ content: '❌ Could not read saved reminders.', ephemeral: true });
-      }
+        await clearUserReminders(interaction.user.id);
+
 
       const before = reminders.length;
-      reminders = reminders.filter(r => r.userId !== interaction.user.id);
+		await clearUserReminders(interaction.user.id);
       const removed = before - reminders.length;
 
       try {
-        saveReminders(reminders);
-      } catch (err) {
-        console.error('[ERROR] Failed to save reminders:', err);
-        return interaction.reply({ content: '❌ Failed to clear reminders.', ephemeral: true });
-      }
+        await clearUserReminders(interaction.user.id);
+
 
       return interaction.reply({
         embeds: [{
