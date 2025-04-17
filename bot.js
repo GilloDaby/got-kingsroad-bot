@@ -11,6 +11,20 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
 });
 
+const REMINDER_FILE = './reminders.json';
+
+function loadReminders() {
+  try {
+    const data = fs.readFileSync(REMINDER_FILE);
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+function saveReminders(reminders) {
+  fs.writeFileSync(REMINDER_FILE, JSON.stringify(reminders, null, 2));
+}
 let timerMessageId = config.timerMessageId || null;
 let timerChannelId = config.channelId || null;
 let lastDrogonHour = null;
@@ -89,6 +103,41 @@ async function updateTimerMessage(client) {
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   setInterval(() => updateTimerMessage(client), 10000);
+
+  setInterval(async () => {
+  const reminders = loadReminders();
+  const now = new Date();
+
+  const timers = {
+    drogon: getNextDrogonTime(),
+    daily: getDailyResetTime(),
+    weekly: getWeeklyResetTime()
+  };
+
+  const updated = [];
+
+  for (const reminder of reminders) {
+    const eventTime = timers[reminder.timer];
+    const diff = eventTime - now;
+    const threshold = reminder.minutes * 60 * 1000;
+
+    if (diff > threshold) {
+      updated.push(reminder); // pas encore le moment
+    } else {
+      // envoyer le DM
+      try {
+        const user = await client.users.fetch(reminder.userId);
+        await user.send(`🔔 **Reminder:** ${reminder.timer.toUpperCase()} starts in ${reminder.minutes} minute(s)!`);
+        console.log(`✅ Reminder sent to ${user.tag}`);
+      } catch (e) {
+        console.warn(`❌ Failed to DM ${reminder.userId}:`, e.message);
+      }
+      // ne pas remettre dans updated = supprime le rappel
+    }
+  }
+
+  saveReminders(updated);
+}, 30 * 1000); // toutes les 30 secondes
 });
 
 client.on('interactionCreate', async interaction => {
@@ -147,7 +196,12 @@ client.on('interactionCreate', async interaction => {
           const channel = await client.channels.fetch(config.channelId);
           const drogonDiff = getNextDrogonTime() - new Date();
           const dailyDiff = getDailyResetTime() - new Date();
-          const msg = await channel.send(`⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}`);
+          const weeklyDiff = getWeeklyResetTime() - new Date();
+const msg = await channel.send(
+  `⏰ **Daily Reset** in: ${formatCountdown(dailyDiff)}\n` +
+  `🔥 **Drogon Timer**: ${formatCountdown(drogonDiff, true)}\n` +
+  `📅 **Weekly Reset**: ${formatCountdown(weeklyDiff)}`
+);
           config.timerMessageId = msg.id;
           timerMessageId = msg.id;
 
@@ -219,43 +273,90 @@ client.on('interactionCreate', async interaction => {
     flags: 64
   });
 }
+
     
 if (sub === 'reminder') {
-  const timerType = interaction.options.getString('timer');
-  const minutes = interaction.options.getInteger('minutes');
-  const user = interaction.user;
+  const action = interaction.options.getSubcommand();
 
-  // Obtenir l'heure cible selon le timer sélectionné
-  let targetTime;
-  if (timerType === 'drogon') targetTime = getNextDrogonTime();
-  else if (timerType === 'daily') targetTime = getDailyResetTime();
-  else if (timerType === 'weekly') targetTime = getWeeklyResetTime();
-  else {
-    return interaction.reply({ content: "❌ Unknown timer type.", ephemeral: true });
-  }
+  if (action === 'add') {
+    const timerType = interaction.options.getString('timer');
+    const minutes = interaction.options.getInteger('minutes');
+    const user = interaction.user;
 
-  const now = new Date();
-  const delay = targetTime - now - (minutes * 60000);
+    let targetTime;
+    if (timerType === 'drogon') targetTime = getNextDrogonTime();
+    else if (timerType === 'daily') targetTime = getDailyResetTime();
+    else if (timerType === 'weekly') targetTime = getWeeklyResetTime();
+    else {
+      return interaction.reply({ content: "❌ Unknown timer type.", ephemeral: true });
+    }
 
-  if (delay <= 0) {
+    const now = new Date();
+    const diffToEvent = Math.floor((targetTime - now) / 60000);
+    const delay = targetTime - now - (minutes * 60000);
+
+    if (delay <= 0) {
+      return interaction.reply({
+        content: `❌ ${timerType.toUpperCase()} happens in **${diffToEvent} minute(s)**. It's too late to set a **${minutes}-minute reminder**.`,
+        ephemeral: true
+      });
+    }
+
+    const reminders = loadReminders();
+    reminders.push({
+      userId: user.id,
+      timer: timerType,
+      minutes: minutes
+    });
+    saveReminders(reminders);
+
     return interaction.reply({
-      content: `❌ It's too late to set a reminder ${minutes} min before ${timerType}.`,
+      content: `✅ I’ll DM you **${minutes} minute(s)** before **${timerType.toUpperCase()}**.`,
       ephemeral: true
     });
   }
 
-  await interaction.reply({
-    content: `✅ I’ll DM you ${minutes} minute(s) before **${timerType}**.`,
-    ephemeral: true
-  });
+  if (action === 'list') {
+    const allReminders = loadReminders();
+    const userReminders = allReminders.filter(r => r.userId === interaction.user.id);
 
-  setTimeout(async () => {
-    try {
-      await user.send(`🔔 **Reminder:** ${timerType.toUpperCase()} is happening in ${minutes} minute(s)!`);
-    } catch (err) {
-      console.error(`❌ Couldn't send DM to ${user.tag}`, err);
+    if (userReminders.length === 0) {
+      return interaction.reply({
+        content: "📭 You have no active reminders.",
+        ephemeral: true
+      });
     }
-  }, delay);
+
+    const description = userReminders
+      .map(r => `• **${r.timer.toUpperCase()}** – ${r.minutes} minute(s) before`)
+      .join('\n');
+
+    return interaction.reply({
+      embeds: [{
+        title: '⏰ Your Active Reminders',
+        description,
+        color: 0x00bfff
+      }],
+      ephemeral: true
+    });
+  }
+
+  if (action === 'clear') {
+    let reminders = loadReminders();
+    const before = reminders.length;
+    reminders = reminders.filter(r => r.userId !== interaction.user.id);
+    const removed = before - reminders.length;
+    saveReminders(reminders);
+
+    return interaction.reply({
+      embeds: [{
+        title: '🗑️ Reminders cleared',
+        description: `You removed **${removed}** reminder(s).`,
+        color: 0xe74c3c
+      }],
+      ephemeral: true
+    });
+  }
 }
     
     if (sub === 'help') {
@@ -330,25 +431,40 @@ if (sub === 'reminder') {
       option.setName('role').setDescription('Role to ping').setRequired(true)
     )
 ) 
-      .addSubcommand(sub =>
-        sub.setName('reminder')
-          .setDescription('Set a private reminder for a timer')
-          .addStringOption(opt =>
-            opt.setName('timer')
-              .setDescription('Which timer to set the reminder for')
-              .setRequired(true)
-              .addChoices(
-                { name: 'Drogon', value: 'drogon' },
-                { name: 'Daily Reset', value: 'daily' },
-                { name: 'Weekly Reset', value: 'weekly' }
-              )
-          )
-          .addIntegerOption(opt =>
-            opt.setName('minutes')
-              .setDescription('How many minutes before the event')
-              .setRequired(true)
-          )
-      )
+    
+.addSubcommandGroup(group =>
+  group.setName('reminder')
+    .setDescription('Manage private reminders')
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Add a reminder before a timer')
+        .addStringOption(opt =>
+          opt.setName('timer')
+            .setDescription('Choose the timer')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Drogon', value: 'drogon' },
+              { name: 'Daily Reset', value: 'daily' },
+              { name: 'Weekly Reset', value: 'weekly' }
+            )
+        )
+        .addIntegerOption(opt =>
+          opt.setName('minutes')
+            .setDescription('How many minutes before')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List your active reminders')
+    )
+    .addSubcommand(sub =>
+      sub.setName('clear')
+        .setDescription('Clear all your active reminders')
+    )
+)
+
+    
     .addSubcommand(sub =>
         sub.setName('help')
           .setDescription('Display command usage help')
