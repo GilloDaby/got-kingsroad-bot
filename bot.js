@@ -16,7 +16,8 @@ const REMINDER_FILE = './reminders.json';
 function loadReminders() {
   try {
     const data = fs.readFileSync(REMINDER_FILE);
-    return JSON.parse(data);
+    const reminders = JSON.parse(data);
+    return Array.isArray(reminders) ? reminders : [];
   } catch {
     return [];
   }
